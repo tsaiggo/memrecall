@@ -368,7 +368,7 @@ These constants come from `src/constants.ts`.
 | `MAX_MESSAGE_LENGTH` | `2000` | Max characters kept from one text message part when parsing history |
 | `MAX_TOTAL_OUTPUT` | `10485760` | Max total bytes returned by `memrecall_parse` |
 | `MAX_CATALOG_SIZE` | `4096` | Max size in bytes for the embedded shard catalog |
-| `MAX_SHARDS` | `50` | Declared shard count limit constant |
+| `MAX_SHARDS` | `50` | Max total shard count enforced when creating new shards |
 | `CORE_BOOTSTRAP_TARGET_SIZE` | `8192` | Target size for the always-loaded summary block inside `memory.md` when overflow is split |
 
 Other fixed paths and names:
@@ -380,8 +380,8 @@ Other fixed paths and names:
 | `MEMORIES_DIR` | `.opencode/memories` |
 | `INDEX_DB_FILE` | `.opencode/memory-index.db` |
 
-In the current source, `MAX_SHARDS` is defined but not enforced inside the tool
-implementation.
+`MAX_SHARDS` is enforced in the write paths for both generated overflow shards
+and user-created shards.
 
 ## File Structure
 

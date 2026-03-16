@@ -1,3 +1,4 @@
+import type { AssistantMessage, Event, Message } from "@opencode-ai/sdk"
 import {
   completeCompressionRun,
   createPendingCompressionRun,
@@ -5,11 +6,15 @@ import {
 } from "./compression-run.ts"
 import { persistCompressionRun } from "./compression-io.ts"
 
+function isAssistantMessage(message: Message): message is AssistantMessage {
+  return message.role === "assistant"
+}
+
 export function createEventHandler(
   pendingCompressionRuns: Map<string, CompressionRunRecord>,
   compressionRunStatsPath: string
 ) {
-  return async ({ event }: { event: any }) => {
+  return async ({ event }: { event: Event }) => {
     if (event.type === "command.executed" && event.properties.name === "memory-parse") {
       const run = createPendingCompressionRun({
         sessionID: event.properties.sessionID,
@@ -25,7 +30,7 @@ export function createEventHandler(
     }
 
     const info = event.properties.info
-    if (info.role !== "assistant" || !info.time.completed) {
+    if (!isAssistantMessage(info) || !info.time.completed) {
       return
     }
 

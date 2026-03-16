@@ -14,7 +14,8 @@ export function readCompressionRunHistory(statsPath: string): CompressionRunReco
     const content = readFileSync(statsPath, "utf-8")
     const parsed = JSON.parse(content)
     return Array.isArray(parsed) ? parsed as CompressionRunRecord[] : []
-  } catch {
+  } catch (err) {
+    console.warn("[memrecall] readCompressionRunHistory: failed to parse stats file", err)
     return []
   }
 }

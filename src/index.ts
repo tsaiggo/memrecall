@@ -22,6 +22,7 @@ const plugin: Plugin = async (ctx) => {
     mkdirSync(indexDir, { recursive: true })
   }
   const index = new MemoryIndex(indexPath)
+  // TODO: MemoryIndex.close() exists but @opencode-ai/plugin has no shutdown/destroy hook to wire it.
   const memoriesDir = path.join(ctx.directory, MEMORIES_DIR)
   const compressionRunStatsPath = path.join(
     ctx.directory,
