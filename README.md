@@ -1,361 +1,247 @@
 # memrecall
 
-> Progressive memory loading for OpenCode agents.
+> Long-term memory for OpenCode without prompt bloat.
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Bun](https://img.shields.io/badge/runtime-Bun-f472b6?logo=bun)](https://bun.sh)
 
+memrecall helps OpenCode sessions keep useful long-term context without forcing every detail into every prompt.
+
+- `memory.md` stores compact, always-loaded context.
+- `memories/*.md` stores deeper topic-specific shards.
+- SQLite FTS5 makes those shards searchable when the agent needs them.
+
+In practice, that means you can keep stable project context available in every session while still storing richer notes, decisions, and workflows as load-on-demand memory.
+
 ## Table of Contents
 
-- [Why memrecall?](#why-memrecall)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
+- [Getting Started](#getting-started)
 - [How It Works](#how-it-works)
-- [Architecture](#architecture)
-- [Tools Reference](#tools-reference)
+- [Common Workflows](#common-workflows)
+- [Tools Overview](#tools-overview)
 - [Configuration](#configuration)
-- [File Structure](#file-structure)
-- [Memory Lifecycle](#memory-lifecycle)
-- [Troubleshooting](#troubleshooting)
 - [Development](#development)
 - [License](#license)
 
-## Why memrecall?
+## Getting Started
 
-AI coding agents lose context between sessions.
+### Prerequisites
 
-Every new OpenCode session starts with a blank slate. The agent doesn't remember
-your projects, preferences, patterns, or past decisions unless that context is
-reintroduced.
+- Bun
+- OpenCode
+- Access to either:
+  - `~/.config/opencode/opencode.json`, or
+  - project-level `.opencode/config.json`
 
-memrecall solves that with progressive memory loading.
+### Install
 
-- A small **Core Memory** bootstrap file is loaded into every session.
-- Deep **Memory Shards** are stored as topic files and loaded only when needed.
-- A local **SQLite FTS5** index finds the right shard fast, with BM25 ranking.
+Clone the repository and install dependencies:
 
-This gives you a practical middle ground.
+```bash
+git clone https://github.com/tsaiggo/memrecall.git
+cd memrecall
+bun install
+```
 
-You keep a stable memory profile for broad context, and you keep detailed notes
-in topic shards that don't need to live in every prompt.
+### Register the plugin
 
-The result is better continuity, lower prompt bloat, and a memory system that
-matches how real projects grow over time.
+Create `~/.opencode/plugins/memrecall.ts`:
 
-## Installation
+```typescript
+export { default } from "/path/to/memrecall/src/index"
+```
 
-**Prerequisite:** Bun is required. The plugin uses `bun:sqlite` for embedded
-full-text search.
+### Enable it in OpenCode
 
-1. Clone the repository:
+Register the plugin in your OpenCode config using either the global config or a project-level config.
 
-   ```bash
-   git clone https://github.com/tsaiggo/memrecall.git
-   ```
+memrecall writes its runtime files under the current project directory inside `.opencode/`.
 
-2. Enter the project directory and install dependencies:
+### Run `/memory-parse`
 
-   ```bash
-   bun install
-   ```
+Open OpenCode in a project with existing chat history, then run:
 
-3. Create the plugin bridge file at `~/.opencode/plugins/memrecall.ts`:
+```text
+/memory-parse
+```
 
-   ```typescript
-   export { default } from "/path/to/memrecall/src/index"
-   ```
+The command asks the agent to:
 
-4. Register the plugin in your OpenCode config.
+1. read prior OpenCode sessions,
+2. extract stable context into core memory,
+3. split detailed topics into shards, and
+4. write the results back into `.opencode/`.
 
-   Use either:
+### Expected output
 
-   - `~/.config/opencode/opencode.json`
-   - project-level `.opencode/config.json`
-
-5. Start OpenCode in any project where you want memory support.
-
-At runtime, the plugin writes memory files under the current project directory,
-inside `.opencode/`.
-
-## Quick Start
-
-You can get useful memory in about a minute.
-
-1. Open OpenCode in any project.
-2. Run `/memory-parse`.
-3. The agent reads your chat history and splits it into:
-   - `memory.md` for stable, always-loaded bootstrap context
-   - `memories/*.md` for topic-specific details
-4. On the next session, memrecall auto-loads the core profile and exposes a
-   shard catalog in tool descriptions.
-
-What gets created:
+After the first run, memrecall writes files like these inside the current project:
 
 ```text
 .opencode/
 ├─ memory.md
 ├─ memory-index.db
+├─ memory-run-stats.json
 └─ memories/
    ├─ project-overview.md
    └─ coding-preferences.md
 ```
 
-Example `memory.md`:
-
-```markdown
-# User Memory
-
-## Communication
-- Prefers concise answers
-- Wants exact command examples
-
-## Project Context
-- Maintains OpenCode plugins in TypeScript
-- Uses Bun for local development
-
-## Conventions
-- Keep docs professional and direct
-- Avoid unnecessary prompt noise
-```
-
-Example shard file:
-
-```markdown
----
-title: OpenCode Plugin Patterns
-summary: Notes about plugin structure, tool design, and session memory flow.
-tags: opencode, plugin, memory, typescript
-created: 2026-03-13
-updated: 2026-03-13
----
-
-## Key points
-
-- Register tools in `src/index.ts`
-- Keep summaries short because the catalog shows only summary text
-- Load full shard content only when the topic becomes relevant
-```
-
-The slug is the file name, not a frontmatter field. For the example above, the
-file would be `opencode-plugin-patterns.md`.
+- `memory.md` is the compact bootstrap loaded into future sessions.
+- `memory-index.db` stores the shard search index.
+- `memory-run-stats.json` records token usage for completed compression runs.
+- `memories/*.md` holds topic-specific knowledge for progressive loading.
 
 ## How It Works
 
-memrecall uses a two-tier memory design.
+memrecall uses a two-layer memory model.
 
-**Core Memory Bootstrap**
+### Core memory
 
-- File: `.opencode/memory.md`
-- Size cap: 65,536 bytes
-- Loaded into every session as an instruction if the file exists
-- Best for user preferences, project overview, business context, and stable
-  conventions
-- If the core write path overflows, memrecall converts the extra detail into
-  generated shards and keeps `memory.md` as a compact bootstrap plus shard map
+- Path: `.opencode/memory.md`
+- Size cap: `65536` bytes
+- Loaded automatically into future sessions when present
+- Best for stable, broad context such as user preferences, project conventions, and long-lived background knowledge
+- This is the layer that gives future sessions immediate continuity
 
-**Memory Shards**
+### Memory shards
 
-- Directory: `.opencode/memories/`
-- Size cap per shard: 32,768 bytes
+- Path: `.opencode/memories/`
+- Size cap per shard: `32768` bytes
 - One topic per file
-- Best for project notes, workflows, architecture details, and past decisions
+- Best for detailed notes, project decisions, architecture details, workflows, and historical context
+- This is the layer that keeps deep memory available without loading it all at once
 
-**FTS5 Index**
+### Search and retrieval
 
-- File: `.opencode/memory-index.db`
-- Built with SQLite FTS5 through `bun:sqlite`
-- Tokenizer: `porter unicode61`
-- Search uses `bm25(shards_fts)` and orders by rank ascending
-- Porter stemming means related word forms can match the same shard
+- Path: `.opencode/memory-index.db`
+- Built with SQLite FTS5 via `bun:sqlite`
+- Search uses BM25 ranking over indexed shard content
+- `memrecall_search` finds relevant shards
+- `memrecall_load` retrieves the full shard body when needed
 
-**Shard Catalog**
+The default pattern is: search first, then load the one shard you actually need.
 
-- Built at session start from `index.getCatalog()`
-- Embedded into the descriptions for `memrecall_load` and
-  `memrecall_search`
-- Capped at 4,096 bytes
-- Gives the agent a lightweight index of available topics before it runs a tool
+### Automatic overflow handling
 
-Important behavior:
+If core memory is too large, memrecall does not keep expanding `memory.md` forever.
+Instead, it keeps a smaller bootstrap and moves overflow into generated `core-auto-*` shards so the always-loaded context stays compact.
 
-- The catalog is a session-start snapshot.
-- New shards written during a session can appear in search results.
-- They won't appear in the embedded catalog until the next session starts.
+### Session catalog behavior
 
-The `/memory-parse` command ties this together.
+At session start, memrecall builds a lightweight shard catalog and embeds it into tool descriptions.
 
-It instructs the agent to read session history, split stable knowledge from
-topic knowledge, write the compact bootstrap, then write or update shards.
+- Search can still find newly written shards in the same session.
+- The embedded catalog itself refreshes on the next session start.
 
-## Architecture
+## Common Workflows
 
-Diagram 1, plugin structure:
+### 1. Initialize project memory
 
-```text
-OpenCode Session
-|
-+-- Plugin init
-|   +-- load .opencode/memory.md bootstrap
-|   +-- build shard catalog
-|   `-- register interfaces
-|
-+-- Tools (7)
-|   +-- memrecall_parse
-|   +-- memrecall_write
-|   +-- memrecall_write_shard
-|   +-- memrecall_search
-|   +-- memrecall_load
-|   +-- memrecall_prune
-|   `-- memrecall_compression_stats
-|
-`-- Command (1)
-    `-- /memory-parse
-```
+Use `/memory-parse` when you want to build or refresh memory from existing OpenCode history.
 
-Diagram 2, data flow:
+Typical result:
 
-```text
-Memory creation
-Chat sessions -> /memory-parse -> memrecall_parse -> analyze + split
-                                              |-> memrecall_write
-                                              |   -> .opencode/memory.md bootstrap
-                                              `-> memrecall_write_shard
-                                                  -> .opencode/memories/*.md
-                                                  -> .opencode/memory-index.db
+- stable facts go into `memory.md`
+- detailed topics go into shard files
+- the shard index updates automatically
 
-Memory recall
-Session start -> auto-load .opencode/memory.md
-             -> build shard catalog in tool descriptions
-             -> memrecall_search -> memrecall_load
-```
+This is usually the first thing to run after installing the plugin in a project you already work in.
 
-This design keeps the always-loaded context small, while still making deep
-project knowledge easy to find. Oversized core memory is automatically pushed
-into generated `core-auto-*` shards so detailed notes remain progressively
-loadable.
+### 2. Recall a topic
 
-## Tools Reference
+When you know the subject but not the exact shard name:
 
-The plugin exposes seven tools.
+1. run `memrecall_search`
+2. pick a matching slug from the results
+3. run `memrecall_load` for the full content
+
+This keeps the default prompt small while still making deep memory available on demand.
+
+### 3. Update memory directly
+
+Use:
+
+- `memrecall_write` for the core bootstrap
+- `memrecall_write_shard` for topic-specific knowledge
+
+Use the core bootstrap for high-signal facts that should always be present, and shards for material that only matters in certain conversations.
+
+When writing an existing shard again, memrecall preserves the original `created` date and refreshes `updated`.
+
+### 4. Clean up stale memory
+
+Run `memrecall_prune` without arguments to list low-value shards, then prune a specific slug when you want to remove it.
+
+### 5. Inspect compression token usage
+
+Run `memrecall_compression_stats` after `/memory-parse` to inspect the recorded token usage for the latest completed compression run, including input, output, reasoning, and cache tokens.
+
+## Tools Overview
+
+memrecall exposes seven tools.
 
 ### `memrecall_parse`
 
-Read all chat history from OpenCode sessions. Returns formatted conversation
-text for analysis.
+Reads OpenCode session history and returns formatted conversation text for analysis.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| None | - | No | This tool takes no parameters. |
-
-**Notes**
-
-- Reads sessions through the OpenCode client.
-- Sorts sessions by creation time, newest first.
-- Truncates each text part to `MAX_MESSAGE_LENGTH`.
-- Stops when total output reaches `MAX_TOTAL_OUTPUT`.
+- **Use it when:** you want source material for memory extraction
+- **Arguments:** none
+- **Returns:** formatted session history, newest sessions first, capped by `MAX_TOTAL_OUTPUT`
+- **Most often used by:** the `/memory-parse` workflow
 
 ### `memrecall_write`
 
-Write the generated memory profile to `.opencode/memory.md`.
-If the core profile is oversized, memrecall writes a compact bootstrap and
-converts the overflow into generated shards under `.opencode/memories/`.
+Writes the core memory bootstrap to `.opencode/memory.md`.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `content` | `string` | Yes | The markdown content of the memory profile |
-
-**Notes**
-
-- Writes `.opencode/memory.md`.
-- If content fits, it is stored directly as the always-loaded bootstrap.
-- If content exceeds `MAX_MEMORY_SIZE`, memrecall generates `core-auto-*`
-  shards, indexes them, and stores a compact bootstrap manifest in
-  `.opencode/memory.md`.
+- **Use it when:** you want to save stable, always-loaded memory
+- **Arguments:** `content`
+- **Returns:** a success message with byte and token estimates
+- **Important:** if the content is too large, memrecall automatically splits overflow into generated shards
 
 ### `memrecall_write_shard`
 
-Write a memory shard to disk and index it for search.
+Writes a topic shard to disk and updates the search index.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `slug` | `string` | Yes | Kebab-case topic name, e.g. `nextjs-patterns` |
-| `title` | `string` | Yes | Human-readable title |
-| `summary` | `string` | Yes | 1-2 sentence summary for the catalog |
-| `tags` | `string` | Yes | Comma-separated tags, e.g. `nextjs,react,routing` |
-| `body` | `string` | Yes | Full markdown content for this shard |
-
-**Notes**
-
-- Splits `tags` on commas and trims whitespace.
-- Preserves the existing `created` date when updating a shard.
-- Sets `updated` to the current ISO date.
-- Writes the shard file, then upserts the index entry.
+- **Use it when:** you want to add or update detailed topic memory
+- **Arguments:** `slug`, `title`, `summary`, `tags`, `body`
+- **Returns:** the shard path and indexing confirmation
+- **Important:** summaries matter because they drive shard discoverability in search and catalog views
 
 ### `memrecall_search`
 
-Source description template:
+Searches shard memory by keyword, topic, or project name.
 
-`Search memory shards by keyword, topic, or project name. Returns ranked results.\n\n${catalog}\n\nSupports FTS5 query syntax: AND, OR, NOT, prefix* matching.`
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `query` | `string` | Yes | Search query to find relevant memory shards. Use keywords, topics, or project names. |
-
-**Notes**
-
-- Calls `index.search(args.query, 5)`.
-- Returns up to 5 results.
-- If the query is empty after trimming, the index returns the most-accessed
-  shards.
-- On no match, the tool rebuilds the catalog and returns it with the message.
+- **Use it when:** you know the topic but not the shard slug
+- **Arguments:** `query`
+- **Returns:** up to 5 ranked shard matches with title, slug, summary, and tags
+- **Next step:** usually follow with `memrecall_load`
 
 ### `memrecall_load`
 
-Source description template:
+Loads the full content of a specific shard.
 
-`Load full content of a specific memory shard by slug.\n\n${catalog}`
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `slug` | `string` | Yes | The slug of the memory shard to load |
-
-**Notes**
-
-- Reads the shard from `.opencode/memories/<slug>.md`.
-- Increments the shard access counter on successful load.
-- Returns XML-like wrapper text with slug, title, tags, updated date, and body.
+- **Use it when:** you already know the shard slug
+- **Arguments:** `slug`
+- **Returns:** the shard body plus title, tags, and updated date
+- **Important:** successful loads increment shard access counts
 
 ### `memrecall_prune`
 
-Remove stale memory shards or list candidates for pruning.
+Lists stale shards or removes one by slug.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `slug` | `string` | No | Specific shard slug to prune. If omitted, shows stale shards for review. |
-
-**Notes**
-
-- If `slug` is provided, deletes the shard file and removes it from the index.
-- If `slug` is omitted, lists stale shards where `access_count < 2`.
-- Stale shards are sorted by lowest access count first.
+- **Use it when:** you want to review or delete low-value memory
+- **Arguments:** optional `slug`
+- **Returns:** either a stale-shard list or a prune confirmation
+- **Important:** listing stale shards is a review step; pruning is a separate explicit action
 
 ### `memrecall_compression_stats`
 
-Show actual model token usage recorded for the latest `/memory-parse`
-compression run.
+Shows recorded token usage for the latest completed `/memory-parse` compression run.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `sessionID` | `string` | No | Optional session ID to filter compression runs. |
-
-**Notes**
-
-- Returns token usage from the most recent completed compression run.
-- If `sessionID` is provided, returns stats for that specific session.
-- Output includes session info, timestamps, cost, and a full token breakdown
-  (input, output, reasoning, cache read, cache write).
-- If no completed runs exist, prompts you to run `/memory-parse` first.
+- **Use it when:** you want actual model usage instead of rough estimates
+- **Arguments:** optional `sessionID`
+- **Returns:** session metadata, timestamps, cost, and a full token breakdown
 
 ## Configuration
 
@@ -364,14 +250,14 @@ These constants come from `src/constants.ts`.
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `MAX_MEMORY_SIZE` | `65536` | Max size in bytes for `.opencode/memory.md` |
-| `MAX_SHARD_SIZE` | `32768` | Max size in bytes for a single memory shard file |
-| `MAX_MESSAGE_LENGTH` | `2000` | Max characters kept from one text message part when parsing history |
+| `MAX_SHARD_SIZE` | `32768` | Max size in bytes for a single shard file |
+| `MAX_MESSAGE_LENGTH` | `2000` | Max characters kept from a single text message part during parsing |
 | `MAX_TOTAL_OUTPUT` | `10485760` | Max total bytes returned by `memrecall_parse` |
 | `MAX_CATALOG_SIZE` | `4096` | Max size in bytes for the embedded shard catalog |
-| `MAX_SHARDS` | `50` | Max total shard count enforced when creating new shards |
-| `CORE_BOOTSTRAP_TARGET_SIZE` | `8192` | Target size for the always-loaded summary block inside `memory.md` when overflow is split |
+| `MAX_SHARDS` | `50` | Max total shard count across generated and user-created shards |
+| `CORE_BOOTSTRAP_TARGET_SIZE` | `8192` | Target size for the always-loaded summary when overflow splitting occurs |
 
-Other fixed paths and names:
+Other fixed names and paths:
 
 | Constant | Value |
 |----------|-------|
@@ -379,33 +265,9 @@ Other fixed paths and names:
 | `MEMORY_FILE` | `.opencode/memory.md` |
 | `MEMORIES_DIR` | `.opencode/memories` |
 | `INDEX_DB_FILE` | `.opencode/memory-index.db` |
+| `COMPRESSION_RUN_STATS_FILE` | `.opencode/memory-run-stats.json` |
 
-`MAX_SHARDS` is enforced in the write paths for both generated overflow shards
-and user-created shards.
-
-## File Structure
-
-Runtime layout inside a project:
-
-```text
-.opencode/
-├─ memory.md
-├─ memory-index.db
-└─ memories/
-   ├─ topic-a.md
-   ├─ topic-b.md
-   └─ topic-c.md
-```
-
-What each file does:
-
-- `memory.md` holds stable, broad context for every session.
-- When core memory overflows, `memory.md` becomes a compact bootstrap that lists
-  generated `core-auto-*` shards for progressive loading.
-- `memory-index.db` stores the FTS5 search index and shard metadata.
-- `memories/*.md` stores topic-specific shards with YAML frontmatter.
-
-Shard file format from `src/shard.ts`:
+Runtime shard files use this frontmatter shape:
 
 ```markdown
 ---
@@ -419,136 +281,49 @@ updated: <YYYY-MM-DD>
 <markdown body>
 ```
 
-Notes about the format:
-
-- The file name provides the shard slug.
-- `tags` are stored in frontmatter as a comma-separated line.
-- The body is trimmed when parsed.
-- If a shard grows past the size cap, the body is truncated and a notice is
-  appended.
-
-## Memory Lifecycle
-
-memrecall follows a simple lifecycle.
-
-1. **Create**
-   - Run `/memory-parse`.
-   - The agent reads chat history with `memrecall_parse`.
-   - It writes the core profile with `memrecall_write`.
-   - It writes topic shards with `memrecall_write_shard`.
-   - If the core profile is too large, memrecall auto-splits the overflow into
-     generated shards and keeps `memory.md` compact.
-
-2. **Search**
-   - Use `memrecall_search` with a keyword, topic, or project name.
-   - The query runs against SQLite FTS5.
-   - Results are ranked with BM25 and returned in ascending rank order.
-
-3. **Load**
-   - Use `memrecall_load` with a shard slug.
-   - The full shard content is returned.
-   - Each successful load increments `access_count` in the index.
-
-4. **Update**
-   - Write a shard again with the same slug.
-   - The existing `created` date is preserved.
-   - `updated` is refreshed to the current date.
-   - The FTS table is deleted then reinserted for that slug.
-
-5. **Prune**
-   - Use `memrecall_prune` with no slug to review stale shards.
-   - Use `memrecall_prune` with a slug to remove a shard.
-   - A shard is considered stale when `access_count < 2`.
-
-This gives you a memory system that can grow, refresh, and clean itself over
-time without forcing every detail into every session.
-
-## Troubleshooting
-
-**`/memory-parse` says no sessions were found**
-
-Make sure you already have OpenCode chat history available. The parser only
-works on existing sessions.
-
-**Search returns no results**
-
-Try simpler keywords, topic names, or project names. FTS5 supports operators
-such as `AND`, `OR`, `NOT`, and `prefix*` matching.
-
-**A shard exists on disk but does not show up in the catalog**
-
-The catalog is built once at session start. Search can still find newly written
-shards, but the embedded catalog updates on the next session.
-
-**A large memory file or shard was cut off**
-
-Core memory no longer needs to stay monolithic. If `memrecall_write` receives
-an oversized core profile, it converts the overflow into generated shards and
-keeps `memory.md` as a smaller bootstrap. Individual shard files are still
-capped at 32,768 bytes.
-
-**The plugin fails with an FTS5 error**
-
-The source checks FTS5 availability during index initialization and throws
-`FTS5 not available in this Bun build` if support is missing. Use a Bun build
-with SQLite FTS5 enabled.
+The slug comes from the file name, not a frontmatter field.
 
 ## Development
 
-For contributors working on the plugin itself:
-
-**Prerequisites**
+### Prerequisites
 
 - Bun 1.x or newer
 - TypeScript 5 or newer
 
-**Project structure**
+### Project structure
 
-- `src/index.ts`, plugin entry point, command registration, tool registration,
-  core memory bootstrap auto-load, overflow splitting, and shard catalog injection
-- `src/constants.ts`, shared paths and size limits
-- `src/types.ts`, TypeScript interfaces for `ShardMeta`, `ShardContent`, and
-  `IndexEntry`
-- `src/index-db.ts`, SQLite setup, FTS5 search, BM25 ranking, access counters,
-  stale shard queries, and catalog reads
-- `src/shard.ts`, shard serialization, YAML frontmatter parsing, file I/O,
-  truncation, and deletion helpers
-- `src/prompt.ts`, the `/memory-parse` command template used to drive memory
-  extraction
-- `src/memory-planner.ts`, progressive memory loading with automatic shard
-  splitting for oversized core memory
-- `src/compression-run.ts`, tracks real model token usage during `/memory-parse`
-  compression runs via OpenCode event hooks
-- `src/token.ts`, local token estimation heuristic for pre-flight size checks
+- `src/index.ts` — plugin entry point, command registration, bootstrap auto-load, and tool wiring
+- `src/tools.ts` — tool implementations and OpenCode-facing behavior
+- `src/memory-planner.ts` — bootstrap planning and automatic overflow splitting
+- `src/shard.ts` — shard serialization, parsing, truncation, and file I/O
+- `src/index-db.ts` — SQLite setup, FTS5 search, ranking, and shard metadata
+- `src/catalog.ts` — shard catalog building and index reconciliation
+- `src/compression-run.ts` — compression run tracking
+- `src/compression-io.ts` — persisted compression stats history
+- `src/prompt.ts` — `/memory-parse` prompt template
+- `src/token.ts` — local token estimation heuristics
+- `src/types.ts` — shared TypeScript interfaces
 
-**Build**
+### Build
 
 ```bash
 bun build ./src/index.ts --outdir dist --target bun
 ```
 
-**Local testing**
+### Test
+
+```bash
+bun test
+./node_modules/.bin/tsc --noEmit
+```
+
+### Local verification flow
 
 1. Link the plugin through `~/.opencode/plugins/memrecall.ts`.
 2. Register it in OpenCode config.
 3. Start OpenCode in a test project.
 4. Run `/memory-parse`.
-5. Inspect `.opencode/memory.md`, `.opencode/memories/`, and search behavior.
-
-**Implementation notes**
-
-- `listShards()` exists in `src/shard.ts` as a utility.
-- The plugin currently uses `index.getCatalog()` for the runtime catalog.
-- The FTS table is updated by deleting the old row, then inserting the new row.
-- `memrecall_load` increments access counts through `index.incrementAccess()`.
-
-**TypeScript types**
-
-| Type | Purpose |
-|------|---------|
-| `ShardMeta` | Frontmatter and metadata for a shard |
-| `ShardContent` | `ShardMeta` plus the markdown body |
-| `IndexEntry` | Search index payload plus `mtime` and `access_count` |
+5. Inspect `.opencode/memory.md`, `.opencode/memories/`, search results, and compression stats.
 
 ## License
 
