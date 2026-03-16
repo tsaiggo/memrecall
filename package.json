@@ -1,6 +1,14 @@
 {
   "name": "memrecall",
   "version": "0.1.0",
+  "description": "Progressive memory loading plugin for OpenCode — build long-term AI agent memory from chat sessions",
+  "author": "tsaiggo",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tsaiggo/memrecall.git"
+  },
+  "keywords": ["opencode", "plugin", "memory", "ai", "agent", "sqlite", "fts5"],
   "type": "module",
   "module": "src/index.ts",
   "main": "src/index.ts",
