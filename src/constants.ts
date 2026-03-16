@@ -6,6 +6,9 @@ export const MAX_TOTAL_OUTPUT = 10 * 1024 * 1024
 
 export const MEMORIES_DIR = ".opencode/memories"
 export const INDEX_DB_FILE = ".opencode/memory-index.db"
+export const COMPRESSION_RUN_STATS_FILE = ".opencode/memory-run-stats.json"
 export const MAX_CATALOG_SIZE = 4 * 1024
 export const MAX_SHARD_SIZE = 32 * 1024
 export const MAX_SHARDS = 50
+export const CORE_BOOTSTRAP_TARGET_SIZE = 8 * 1024
+export const AUTO_CORE_SHARD_PREFIX = "core-auto-"

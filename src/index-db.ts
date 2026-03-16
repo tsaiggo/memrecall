@@ -56,7 +56,7 @@ export class MemoryIndex {
       this.db.run("DELETE FROM shards_fts WHERE slug = ?", [entry.slug])
       this.db.run(
         "INSERT INTO shards_fts (slug, title, summary, tags, body) VALUES (?, ?, ?, ?, ?)",
-        [entry.slug, entry.title, entry.summary, entry.tags, entry.body]
+        [entry.slug, entry.title, entry.summary, entry.tags.join(","), entry.body]
       )
       this.db.run(
         "INSERT OR REPLACE INTO shard_meta (slug, mtime, access_count) VALUES (?, ?, ?)",
@@ -68,7 +68,7 @@ export class MemoryIndex {
   search(
     query: string,
     limit = 5
-  ): Array<{ slug: string; title: string; summary: string; tags: string; rank: number }> {
+  ): Array<{ slug: string; title: string; summary: string; tags: string[]; rank: number }> {
     const trimmed = query.trim()
     if (!trimmed) {
       // Return most-accessed shards
@@ -81,7 +81,7 @@ export class MemoryIndex {
            LIMIT ?`
         )
         .all(limit) as Array<{ slug: string; title: string; summary: string; tags: string; rank: number }>
-      return rows
+      return rows.map((r) => ({ ...r, tags: r.tags ? r.tags.split(",").map((t) => t.trim()) : [] }))
     }
 
     try {
@@ -94,9 +94,21 @@ export class MemoryIndex {
            LIMIT ?`
         )
         .all(trimmed, limit) as Array<{ slug: string; title: string; summary: string; tags: string; rank: number }>
-      return rows
-    } catch {
-      return []
+      return rows.map((r) => ({ ...r, tags: r.tags ? r.tags.split(",").map((t) => t.trim()) : [] }))
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      // FTS5 syntax errors and query parse errors are user-input problems — return empty results
+      if (
+        message.includes("fts5:") ||
+        message.includes("malformed MATCH") ||
+        message.includes("unterminated string") ||
+        message.includes("no such column") ||
+        message.includes("parse error")
+      ) {
+        return []
+      }
+      // Real DB errors (corruption, SQLITE_CORRUPT, etc.) should propagate
+      throw err
     }
   }
 
@@ -123,6 +135,13 @@ export class MemoryIndex {
     return this.db
       .query("SELECT f.slug, f.title, f.summary FROM shards_fts f ORDER BY f.slug")
       .all() as Array<{ slug: string; title: string; summary: string }>
+  }
+
+  allSlugs(): string[] {
+    const rows = this.db
+      .query("SELECT slug FROM shard_meta ORDER BY slug")
+      .all() as Array<{ slug: string }>
+    return rows.map((r) => r.slug)
   }
 
   close(): void {
