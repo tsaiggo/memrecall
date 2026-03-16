@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlink
 import path from "path"
 import type { ShardMeta, ShardContent } from "./types.ts"
 import { MAX_SHARD_SIZE } from "./constants.ts"
+import { truncateUtf8 } from "./memory-planner.ts"
 
 const FRONTMATTER_REGEX = /^---\n([\s\S]*?)\n---\n?([\s\S]*)/
 
@@ -92,7 +93,8 @@ export function readShard(dir: string, slug: string): ShardContent | null {
       updated: meta.updated ?? "",
       body,
     }
-  } catch {
+  } catch (err) {
+    console.warn(`[memrecall] readShard: failed to read shard "${slug}"`, err)
     return null
   }
 }
@@ -116,11 +118,7 @@ export function writeShard(dir: string, shard: ShardContent): void {
     const frontmatter = serialized.slice(0, closingIndex + 5) // includes "\n---\n"
     const frontmatterBytes = Buffer.byteLength(frontmatter, "utf-8")
     const availableBytes = MAX_SHARD_SIZE - frontmatterBytes - 50 // Reserve for truncation notice
-    let truncatedBody = shard.body
-    while (Buffer.byteLength(truncatedBody, "utf-8") > availableBytes) {
-      truncatedBody = truncatedBody.slice(0, truncatedBody.length - 100)
-    }
-    truncatedBody += "\n\n[Content truncated to fit size limit]"
+    const truncatedBody = truncateUtf8(shard.body, availableBytes) + "\n\n[Content truncated to fit size limit]"
     serialized = serializeShard({ ...shard, body: truncatedBody })
   }
 
@@ -153,7 +151,8 @@ export function listShards(dir: string): ShardMeta[] {
         created: meta.created ?? "",
         updated: meta.updated ?? "",
       })
-    } catch {
+    } catch (err) {
+      console.warn(`[memrecall] listShards: failed to parse shard file "${file}"`, err)
       continue
     }
   }
@@ -168,7 +167,8 @@ export function deleteShard(dir: string, slug: string): boolean {
     if (!existsSync(filePath)) return false
     unlinkSync(filePath)
     return true
-  } catch {
+  } catch (err) {
+    console.warn(`[memrecall] deleteShard: failed to delete shard "${slug}"`, err)
     return false
   }
 }

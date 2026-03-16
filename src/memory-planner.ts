@@ -29,12 +29,30 @@ export interface MemoryPlan {
   metrics: MemoryCompressionMetrics
 }
 
-function truncateUtf8(input: string, maxBytes: number): string {
+export function truncateUtf8(input: string, maxBytes: number): string {
   if (Buffer.byteLength(input, "utf-8") <= maxBytes) {
     return input
   }
 
-  return Buffer.from(input, "utf-8").subarray(0, maxBytes).toString("utf-8")
+  // Binary search for the largest UTF-16 code unit index whose UTF-8 byte length <= maxBytes
+  let lo = 0
+  let hi = input.length
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >>> 1
+    if (Buffer.byteLength(input.slice(0, mid), "utf-8") <= maxBytes) {
+      lo = mid
+    } else {
+      hi = mid - 1
+    }
+  }
+  // Avoid splitting a surrogate pair: if lo lands after a high surrogate, back up
+  if (lo > 0) {
+    const code = input.charCodeAt(lo - 1)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      lo -= 1
+    }
+  }
+  return input.slice(0, lo)
 }
 
 function sanitizeSlugPart(value: string): string {
@@ -113,10 +131,8 @@ function splitParagraphBlock(block: string, maxBytes: number): string[] {
       break
     }
 
-    let sliceLength = remaining.length
-    while (sliceLength > 0 && Buffer.byteLength(remaining.slice(0, sliceLength), "utf-8") > maxBytes) {
-      sliceLength -= 1
-    }
+    const truncated = truncateUtf8(remaining, maxBytes)
+    const sliceLength = truncated.length
 
     if (sliceLength <= 0) {
       break

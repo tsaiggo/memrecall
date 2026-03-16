@@ -20,7 +20,7 @@
     "build": "bun build ./src/index.ts --outdir dist --target bun"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "latest",
+    "@opencode-ai/plugin": "^1.2.25",
     "zod": "^4"
   },
   "devDependencies": {

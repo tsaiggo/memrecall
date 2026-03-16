@@ -1,13 +1,15 @@
 import { describe, expect, it } from "bun:test"
 import { compareSessionsByCreated, formatSessionDate } from "../src/tools"
 
+type SessionLike = { time?: { created?: number } }
+
 describe("compareSessionsByCreated", () => {
   it("sorts sessions descending by time.created", () => {
     const sessions = [
       { time: { created: 3 } },
       { time: { created: 1 } },
       { time: { created: 2 } },
-    ]
+    ] satisfies SessionLike[]
     sessions.sort(compareSessionsByCreated)
     expect(sessions.map((s) => s.time.created)).toEqual([3, 2, 1])
   })
@@ -17,22 +19,22 @@ describe("compareSessionsByCreated", () => {
       { time: { created: 5 } },
       {},
       { time: { created: 3 } },
-    ] as any[]
+    ] satisfies SessionLike[]
     sessions.sort(compareSessionsByCreated)
-    expect(sessions[0].time.created).toBe(5)
-    expect(sessions[1].time.created).toBe(3)
+    expect(sessions[0]?.time?.created).toBe(5)
+    expect(sessions[1]?.time?.created).toBe(3)
   })
 
   it("sorts time.created === 0 to end", () => {
-    const sessions: any[] = [
+    const sessions: SessionLike[] = [
       { time: { created: 0 } },
       { time: { created: 10 } },
       { time: { created: 5 } },
     ]
     sessions.sort(compareSessionsByCreated)
-    expect(sessions[0].time.created).toBe(10)
-    expect(sessions[1].time.created).toBe(5)
-    expect(sessions[2].time.created).toBe(0)
+    expect(sessions[0]?.time?.created).toBe(10)
+    expect(sessions[1]?.time?.created).toBe(5)
+    expect(sessions[2]?.time?.created).toBe(0)
   })
 
   it("sorts time.created === undefined to end", () => {
@@ -40,10 +42,10 @@ describe("compareSessionsByCreated", () => {
       { time: { created: undefined } },
       { time: { created: 7 } },
       { time: { created: 4 } },
-    ] as any[]
+    ] satisfies SessionLike[]
     sessions.sort(compareSessionsByCreated)
-    expect(sessions[0].time.created).toBe(7)
-    expect(sessions[1].time.created).toBe(4)
+    expect(sessions[0]?.time?.created).toBe(7)
+    expect(sessions[1]?.time?.created).toBe(4)
   })
 })
 

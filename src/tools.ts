@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "fs"
 import path from "path"
-import { tool } from "@opencode-ai/plugin"
+import { tool, type ToolContext, type ToolDefinition } from "@opencode-ai/plugin"
+import type { Session } from "@opencode-ai/sdk"
 import {
   MEMORY_FILE,
   MAX_MESSAGE_LENGTH,
@@ -28,6 +29,42 @@ export function compareSessionsByCreated(
   return timeB - timeA // descending: newest first
 }
 
+interface SessionMessagePart {
+  type: string
+  text?: string
+}
+
+interface SessionMessageRecord {
+  info?: {
+    role?: string
+  }
+  parts?: SessionMessagePart[]
+}
+
+interface MemRecallClient {
+  session: {
+    list(): Promise<{ data?: Session[] }>
+    messages(input: { path: { id: string } }): Promise<{ data?: SessionMessageRecord[] }>
+  }
+}
+
+interface CreateToolsContext {
+  directory: string
+  client: MemRecallClient
+}
+
+interface MemRecallTools {
+  memrecall_parse: ToolDefinition
+  memrecall_write: ToolDefinition
+  memrecall_compression_stats: ToolDefinition
+  memrecall_load: ToolDefinition
+  memrecall_search: ToolDefinition
+  memrecall_prune: ToolDefinition
+  memrecall_write_shard: ToolDefinition
+}
+
+type ToolMap = Record<string, ToolDefinition> & MemRecallTools
+
 export function formatSessionDate(timestamp: number | undefined): string {
   if (!timestamp) return "unknown"
   const ms = timestamp > 1e12 ? timestamp : timestamp * 1000
@@ -41,18 +78,18 @@ function getGeneratedCoreShardSlugs(memoriesDir: string): string[] {
 }
 
 export function createTools(
-  ctx: any,
+  ctx: CreateToolsContext,
   index: MemoryIndex,
   memoriesDir: string,
   compressionRunStatsPath: string,
   catalog: string
-): Record<string, any> {
+): ToolMap {
   return {
     memrecall_parse: tool({
       description:
         "Read all chat history from OpenCode sessions. Returns formatted conversation text for analysis.",
       args: {},
-      async execute(_args: {}, context: any) {
+      async execute(_args: {}, context: ToolContext) {
         context.metadata({ title: "Reading chat history..." })
 
         const sessions = await ctx.client.session.list()
@@ -97,7 +134,8 @@ export function createTools(
             output += sessionOutput
             totalBytes += bytes
             sessionCount++
-          } catch {
+          } catch (err) {
+            console.warn("[memrecall] memrecall_parse: failed to fetch session messages", err)
             continue
           }
         }
@@ -119,7 +157,7 @@ export function createTools(
           .string()
           .describe("The markdown content of the memory profile"),
       },
-      async execute(args: { content: string }, context: any) {
+      async execute(args: { content: string }, context: ToolContext) {
         context.metadata({ title: "Writing memory profile..." })
 
         const content = args.content
@@ -206,7 +244,7 @@ export function createTools(
           .optional()
           .describe("Optional session ID to filter compression runs."),
       },
-      async execute(args: { sessionID?: string }, context: any) {
+      async execute(args: { sessionID?: string }, context: ToolContext) {
         context.metadata({ title: "Reading compression run stats" })
         const history = readCompressionRunHistory(compressionRunStatsPath).filter((run: CompressionRunRecord) => run.status === "completed")
         const selected = args.sessionID
@@ -242,7 +280,7 @@ export function createTools(
           .string()
           .describe("The slug of the memory shard to load"),
       },
-      async execute(args: { slug: string }, context: any) {
+      async execute(args: { slug: string }, context: ToolContext) {
         context.metadata({ title: "Loading: " + args.slug })
         const shard = readShard(memoriesDir, args.slug)
         if (!shard) {
@@ -262,7 +300,7 @@ export function createTools(
             "Search query to find relevant memory shards. Use keywords, topics, or project names."
           ),
       },
-      async execute(args: { query: string }, context: any) {
+      async execute(args: { query: string }, context: ToolContext) {
         context.metadata({ title: "Search: " + args.query })
         const results = index.search(args.query, 5)
         if (results.length === 0) {
@@ -289,7 +327,7 @@ export function createTools(
             "Specific shard slug to prune. If omitted, shows stale shards for review."
           ),
       },
-      async execute(args: { slug?: string }, context: any) {
+      async execute(args: { slug?: string }, context: ToolContext) {
         if (args.slug) {
           context.metadata({ title: "Pruning: " + args.slug })
           const deleted = deleteShard(memoriesDir, args.slug)
@@ -330,7 +368,10 @@ export function createTools(
           .string()
           .describe("Full markdown content for this shard"),
       },
-      async execute(args: { slug: string; title: string; summary: string; tags: string; body: string }, context: any) {
+      async execute(
+        args: { slug: string; title: string; summary: string; tags: string; body: string },
+        context: ToolContext
+      ) {
         context.metadata({ title: "Writing shard: " + args.slug })
 
         const now = new Date().toISOString().slice(0, 10)
