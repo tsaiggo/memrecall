@@ -19,6 +19,21 @@ import { buildCatalog } from "./catalog.ts"
 import { readCompressionRunHistory } from "./compression-io.ts"
 import type { CompressionRunRecord } from "./compression-run.ts"
 
+export function compareSessionsByCreated(
+  a: { time?: { created?: number } },
+  b: { time?: { created?: number } }
+): number {
+  const timeA = a.time?.created ?? 0
+  const timeB = b.time?.created ?? 0
+  return timeB - timeA // descending: newest first
+}
+
+export function formatSessionDate(timestamp: number | undefined): string {
+  if (!timestamp) return "unknown"
+  const ms = timestamp > 1e12 ? timestamp : timestamp * 1000
+  return new Date(ms).toISOString().slice(0, 10)
+}
+
 function getGeneratedCoreShardSlugs(memoriesDir: string): string[] {
   return listShards(memoriesDir)
     .map((shard) => shard.slug)
@@ -45,11 +60,7 @@ export function createTools(
           return "No sessions found. Start some conversations first, then run memory-parse again."
         }
 
-        const sorted = sessions.data.sort((a: any, b: any) => {
-          const timeA = a.time?.created ?? ""
-          const timeB = b.time?.created ?? ""
-          return timeB.localeCompare(timeA)
-        })
+        const sorted = sessions.data.sort(compareSessionsByCreated)
 
         let output = ""
         let totalBytes = 0
@@ -64,7 +75,7 @@ export function createTools(
             })
             if (!msgs.data || msgs.data.length === 0) continue
 
-            let sessionOutput = `[Session: ${session.title || "Untitled"}] [${session.time?.created || "unknown"}]\n`
+            let sessionOutput = `[Session: ${session.title || "Untitled"}] [${formatSessionDate(session.time?.created)}]\n`
 
             for (const msg of msgs.data) {
               if (!msg.parts) continue
