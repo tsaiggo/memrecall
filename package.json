@@ -15,6 +15,10 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "test": "bun test",
+    "build": "bun build ./src/index.ts --outdir dist --target bun"
+  },
   "dependencies": {
     "@opencode-ai/plugin": "latest",
     "zod": "^4"

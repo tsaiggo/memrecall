@@ -5,6 +5,20 @@ import { MAX_SHARD_SIZE } from "./constants.ts"
 
 const FRONTMATTER_REGEX = /^---\n([\s\S]*?)\n---\n?([\s\S]*)/
 
+const VALID_SLUG_REGEX = /^[a-z0-9][a-z0-9_-]*$/
+
+export function validateSlug(slug: string): void {
+  if (!slug || typeof slug !== "string") {
+    throw new Error("Shard slug must be a non-empty string")
+  }
+  if (slug.includes("..") || slug.includes("/") || slug.includes("\\")) {
+    throw new Error(`Invalid shard slug "${slug}": contains path traversal characters`)
+  }
+  if (!VALID_SLUG_REGEX.test(slug)) {
+    throw new Error(`Invalid shard slug "${slug}": must be lowercase alphanumeric with hyphens or underscores, starting with alphanumeric`)
+  }
+}
+
 export function parseFrontmatter(content: string): { meta: Partial<ShardMeta>; body: string } {
   const match = content.match(FRONTMATTER_REGEX)
   if (!match) {
@@ -60,6 +74,11 @@ export function serializeShard(shard: ShardContent): string {
 
 export function readShard(dir: string, slug: string): ShardContent | null {
   try {
+    // Warn on invalid slug but don't crash — backward compatibility for existing shards
+    if (!slug || slug.includes("..") || slug.includes("/") || slug.includes("\\") || !VALID_SLUG_REGEX.test(slug)) {
+      console.warn(`[memrecall] readShard: invalid slug "${slug}", skipping`)
+      return null
+    }
     const filePath = path.join(dir, `${slug}.md`)
     if (!existsSync(filePath)) return null
     const content = readFileSync(filePath, "utf-8")
@@ -79,6 +98,7 @@ export function readShard(dir: string, slug: string): ShardContent | null {
 }
 
 export function writeShard(dir: string, shard: ShardContent): void {
+  validateSlug(shard.slug)
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true })
   }
@@ -88,7 +108,12 @@ export function writeShard(dir: string, shard: ShardContent): void {
 
   if (byteLength > MAX_SHARD_SIZE) {
     // Truncate body to fit within MAX_SHARD_SIZE
-    const frontmatter = serialized.slice(0, serialized.indexOf("---", 3) + 4)
+    // Find the closing frontmatter delimiter properly — search for \n---\n after the opening ---
+    const closingIndex = serialized.indexOf("\n---\n", 3)
+    if (closingIndex === -1) {
+      throw new Error("Malformed shard: could not find closing frontmatter delimiter")
+    }
+    const frontmatter = serialized.slice(0, closingIndex + 5) // includes "\n---\n"
     const frontmatterBytes = Buffer.byteLength(frontmatter, "utf-8")
     const availableBytes = MAX_SHARD_SIZE - frontmatterBytes - 50 // Reserve for truncation notice
     let truncatedBody = shard.body
@@ -112,6 +137,11 @@ export function listShards(dir: string): ShardMeta[] {
   for (const file of files) {
     if (!file.endsWith(".md")) continue
     const slug = file.slice(0, -3)
+    // Skip shards with invalid slugs (warn, don't crash)
+    if (!slug || slug.includes("..") || slug.includes("/") || slug.includes("\\") || !VALID_SLUG_REGEX.test(slug)) {
+      console.warn(`[memrecall] listShards: skipping file with invalid slug "${slug}"`)
+      continue
+    }
     try {
       const content = readFileSync(path.join(dir, file), "utf-8")
       const { meta } = parseFrontmatter(content)
@@ -132,6 +162,7 @@ export function listShards(dir: string): ShardMeta[] {
 }
 
 export function deleteShard(dir: string, slug: string): boolean {
+  validateSlug(slug)
   try {
     const filePath = path.join(dir, `${slug}.md`)
     if (!existsSync(filePath)) return false

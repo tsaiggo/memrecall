@@ -31,7 +31,7 @@ reintroduced.
 
 memrecall solves that with progressive memory loading.
 
-- A small **Core Memory** file, capped at 64 KB, is loaded into every session.
+- A small **Core Memory** bootstrap file is loaded into every session.
 - Deep **Memory Shards** are stored as topic files and loaded only when needed.
 - A local **SQLite FTS5** index finds the right shard fast, with BM25 ranking.
 
@@ -85,7 +85,7 @@ You can get useful memory in about a minute.
 1. Open OpenCode in any project.
 2. Run `/memory-parse`.
 3. The agent reads your chat history and splits it into:
-   - `memory.md` for stable, always-loaded context
+   - `memory.md` for stable, always-loaded bootstrap context
    - `memories/*.md` for topic-specific details
 4. On the next session, memrecall auto-loads the core profile and exposes a
    shard catalog in tool descriptions.
@@ -144,13 +144,15 @@ file would be `opencode-plugin-patterns.md`.
 
 memrecall uses a two-tier memory design.
 
-**Core Memory**
+**Core Memory Bootstrap**
 
 - File: `.opencode/memory.md`
 - Size cap: 65,536 bytes
 - Loaded into every session as an instruction if the file exists
 - Best for user preferences, project overview, business context, and stable
   conventions
+- If the core write path overflows, memrecall converts the extra detail into
+  generated shards and keeps `memory.md` as a compact bootstrap plus shard map
 
 **Memory Shards**
 
@@ -184,7 +186,7 @@ Important behavior:
 The `/memory-parse` command ties this together.
 
 It instructs the agent to read session history, split stable knowledge from
-topic knowledge, write the core profile, then write or update shards.
+topic knowledge, write the compact bootstrap, then write or update shards.
 
 ## Architecture
 
@@ -194,17 +196,18 @@ Diagram 1, plugin structure:
 OpenCode Session
 |
 +-- Plugin init
-|   +-- load .opencode/memory.md
+|   +-- load .opencode/memory.md bootstrap
 |   +-- build shard catalog
 |   `-- register interfaces
 |
-+-- Tools (6)
++-- Tools (7)
 |   +-- memrecall_parse
 |   +-- memrecall_write
 |   +-- memrecall_write_shard
 |   +-- memrecall_search
 |   +-- memrecall_load
-|   `-- memrecall_prune
+|   +-- memrecall_prune
+|   `-- memrecall_compression_stats
 |
 `-- Command (1)
     `-- /memory-parse
@@ -216,7 +219,7 @@ Diagram 2, data flow:
 Memory creation
 Chat sessions -> /memory-parse -> memrecall_parse -> analyze + split
                                               |-> memrecall_write
-                                              |   -> .opencode/memory.md
+                                              |   -> .opencode/memory.md bootstrap
                                               `-> memrecall_write_shard
                                                   -> .opencode/memories/*.md
                                                   -> .opencode/memory-index.db
@@ -228,11 +231,13 @@ Session start -> auto-load .opencode/memory.md
 ```
 
 This design keeps the always-loaded context small, while still making deep
-project knowledge easy to find.
+project knowledge easy to find. Oversized core memory is automatically pushed
+into generated `core-auto-*` shards so detailed notes remain progressively
+loadable.
 
 ## Tools Reference
 
-The plugin exposes six tools.
+The plugin exposes seven tools.
 
 ### `memrecall_parse`
 
@@ -252,7 +257,9 @@ text for analysis.
 
 ### `memrecall_write`
 
-Write the generated memory profile to .opencode/memory.md
+Write the generated memory profile to `.opencode/memory.md`.
+If the core profile is oversized, memrecall writes a compact bootstrap and
+converts the overflow into generated shards under `.opencode/memories/`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -261,8 +268,10 @@ Write the generated memory profile to .opencode/memory.md
 **Notes**
 
 - Writes `.opencode/memory.md`.
-- Truncates content if it exceeds `MAX_MEMORY_SIZE`.
-- Appends `<!-- Memory truncated to fit size limit -->` when truncated.
+- If content fits, it is stored directly as the always-loaded bootstrap.
+- If content exceeds `MAX_MEMORY_SIZE`, memrecall generates `core-auto-*`
+  shards, indexes them, and stores a compact bootstrap manifest in
+  `.opencode/memory.md`.
 
 ### `memrecall_write_shard`
 
@@ -331,6 +340,23 @@ Remove stale memory shards or list candidates for pruning.
 - If `slug` is omitted, lists stale shards where `access_count < 2`.
 - Stale shards are sorted by lowest access count first.
 
+### `memrecall_compression_stats`
+
+Show actual model token usage recorded for the latest `/memory-parse`
+compression run.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `sessionID` | `string` | No | Optional session ID to filter compression runs. |
+
+**Notes**
+
+- Returns token usage from the most recent completed compression run.
+- If `sessionID` is provided, returns stats for that specific session.
+- Output includes session info, timestamps, cost, and a full token breakdown
+  (input, output, reasoning, cache read, cache write).
+- If no completed runs exist, prompts you to run `/memory-parse` first.
+
 ## Configuration
 
 These constants come from `src/constants.ts`.
@@ -343,6 +369,7 @@ These constants come from `src/constants.ts`.
 | `MAX_TOTAL_OUTPUT` | `10485760` | Max total bytes returned by `memrecall_parse` |
 | `MAX_CATALOG_SIZE` | `4096` | Max size in bytes for the embedded shard catalog |
 | `MAX_SHARDS` | `50` | Declared shard count limit constant |
+| `CORE_BOOTSTRAP_TARGET_SIZE` | `8192` | Target size for the always-loaded summary block inside `memory.md` when overflow is split |
 
 Other fixed paths and names:
 
@@ -373,6 +400,8 @@ Runtime layout inside a project:
 What each file does:
 
 - `memory.md` holds stable, broad context for every session.
+- When core memory overflows, `memory.md` becomes a compact bootstrap that lists
+  generated `core-auto-*` shards for progressive loading.
 - `memory-index.db` stores the FTS5 search index and shard metadata.
 - `memories/*.md` stores topic-specific shards with YAML frontmatter.
 
@@ -407,6 +436,8 @@ memrecall follows a simple lifecycle.
    - The agent reads chat history with `memrecall_parse`.
    - It writes the core profile with `memrecall_write`.
    - It writes topic shards with `memrecall_write_shard`.
+   - If the core profile is too large, memrecall auto-splits the overflow into
+     generated shards and keeps `memory.md` compact.
 
 2. **Search**
    - Use `memrecall_search` with a keyword, topic, or project name.
@@ -451,8 +482,10 @@ shards, but the embedded catalog updates on the next session.
 
 **A large memory file or shard was cut off**
 
-This is expected when the size cap is exceeded. Core memory is capped at 65,536
-bytes. Each shard is capped at 32,768 bytes.
+Core memory no longer needs to stay monolithic. If `memrecall_write` receives
+an oversized core profile, it converts the overflow into generated shards and
+keeps `memory.md` as a smaller bootstrap. Individual shard files are still
+capped at 32,768 bytes.
 
 **The plugin fails with an FTS5 error**
 
@@ -472,7 +505,7 @@ For contributors working on the plugin itself:
 **Project structure**
 
 - `src/index.ts`, plugin entry point, command registration, tool registration,
-  core memory auto-load, and shard catalog injection
+  core memory bootstrap auto-load, overflow splitting, and shard catalog injection
 - `src/constants.ts`, shared paths and size limits
 - `src/types.ts`, TypeScript interfaces for `ShardMeta`, `ShardContent`, and
   `IndexEntry`
@@ -482,6 +515,11 @@ For contributors working on the plugin itself:
   truncation, and deletion helpers
 - `src/prompt.ts`, the `/memory-parse` command template used to drive memory
   extraction
+- `src/memory-planner.ts`, progressive memory loading with automatic shard
+  splitting for oversized core memory
+- `src/compression-run.ts`, tracks real model token usage during `/memory-parse`
+  compression runs via OpenCode event hooks
+- `src/token.ts`, local token estimation heuristic for pre-flight size checks
 
 **Build**
 

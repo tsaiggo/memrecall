@@ -15,7 +15,7 @@ export interface IndexEntry {
   slug: string
   title: string
   summary: string
-  tags: string
+  tags: string[]
   body: string
   mtime: number
   access_count: number
