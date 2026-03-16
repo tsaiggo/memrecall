@@ -1,3 +1,5 @@
+<p align="center"><img src="icon.svg" alt="memrecall icon" width="120"></p>
+
 # memrecall
 
 > Long-term memory for OpenCode without prompt bloat.
